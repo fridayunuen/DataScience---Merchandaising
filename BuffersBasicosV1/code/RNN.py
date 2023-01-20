@@ -224,5 +224,19 @@ for producto in df_inv_ventas_hist['SKU'].unique():
 
 
 
+Status.to_csv('Status_'+BU+'.csv', index=False)
+Proyecciones.to_csv('Proyecciones_'+BU+'.csv', index=False)  
+
 Status.to_csv(os.path.join(carpeta_output, 'Status_'+BU+'.csv'), index=False)
 Proyecciones.to_csv(os.path.join(carpeta_output, 'Proyecciones_'+BU+'.csv'), index=False)        
+
+
+
+# Confirmación enviada por correo -----------------------
+fecha = datetime.datetime.now().strftime("%Y-%m-%d")
+hora = datetime.datetime.now().strftime("%H:%M:%S")
+
+mensaje = fecha + ' '+ hora + ' '+ BU
+se.envia_correo('Proyeccion RNN generada con exito', mensaje, 'CredencialesCorreo.json')
+
+print('Proceso concluido con exito')

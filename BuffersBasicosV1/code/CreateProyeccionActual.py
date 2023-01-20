@@ -2,6 +2,7 @@ import datetime
 import numpy as np
 import pandas as pd
 import numpy as np
+import send_email as se
 
 # INPUTS ------------------------------------------------
 BU=input('''Selecciona la BU: BEAUTY JEW ACC CALZADO ROPA ''') 
@@ -56,4 +57,13 @@ if tipo_proyeccion == 'Year_Anterior':
 if tipo_proyeccion == '':
     import TemporadaNormal as TN
     print(tipo_proyeccion)
-    df_producto_tienda = TN.crea_proyeccion_actual(BU, today, div, carpeta_input, carpeta_output)
+    df_producto_tienda = TN.crea_proyeccion_actual(BU, today, div, carpeta_input, carpeta_output)X
+
+# Confirmación enviada por correo -----------------------
+fecha = datetime.datetime.now().strftime("%Y-%m-%d")
+hora = datetime.datetime.now().strftime("%H:%M:%S")
+
+mensaje = fecha + ' '+ hora + ' '+ BU
+se.envia_correo('Proyeccion actual generada con exito', mensaje, 'CredencialesCorreo.json')
+
+print('Proceso concluido con exito')
