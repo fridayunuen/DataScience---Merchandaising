@@ -41,6 +41,7 @@ df_producto_tienda = os.path.join(carpeta_output, 'df_producto_tienda_'+BU+'.csv
 df_producto_tienda = pd.read_csv(df_producto_tienda)
 df_producto_tienda['SKU'] = df_producto_tienda['SKU'].astype(str)
 
+
 # Conexion SQL Server--------------------------------------------------------------------------------------
 connection_string = 'DRIVER={SQL Server};SERVER=Shjet-prod;DATABASE=Allocations;UID='+ credenciales['usuario'] +';PWD='+credenciales['password']
 connection_url = URL.create("mssql+pyodbc", query={"odbc_connect": connection_string})
@@ -77,6 +78,7 @@ df_inventarioActual = pd.read_sql(query_inventarioActual, con=conn)
 
 df_producto_tienda = pd.merge(df_producto_tienda, df_inventarioActual, on='ID', how='left')
 df_producto_tienda['Inventario_Actual'] = df_producto_tienda['Inventario_Actual'].fillna(0)
+
 if len(df_producto_tienda[df_producto_tienda['Proyeccion_Actual'].isna()]) >0:
     print('Faltan datos para realizar la proyeccion actual, son sustituidos por 0')
     df_producto_tienda['Proyeccion_Actual'] = df_producto_tienda['Proyeccion_Actual'].fillna(0)
@@ -220,7 +222,6 @@ def get_bufferanterior(file_excel):
         
     col_names =  []
     for i in range(len(file_excel.iloc[:,0].values)):
-        #if file_excel.iloc[i,0]=="No.":
         if file_excel.iloc[i,0]=="Location Code":
             index = i
             break
