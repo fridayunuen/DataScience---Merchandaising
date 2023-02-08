@@ -57,8 +57,9 @@ if tipo_proyeccion == 'Year_Anterior':
 if tipo_proyeccion == '':
     import TemporadaNormal as TN
     print(tipo_proyeccion)
-    df_producto_tienda = TN.crea_proyeccion_actual(BU, today, div, carpeta_input, carpeta_output)X
+    df_producto_tienda = TN.crea_proyeccion_actual(BU, today, div, carpeta_input, carpeta_output)
 
+    
 # Confirmación enviada por correo -----------------------
 fecha = datetime.datetime.now().strftime("%Y-%m-%d")
 hora = datetime.datetime.now().strftime("%H:%M:%S")
