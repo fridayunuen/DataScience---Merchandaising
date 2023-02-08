@@ -91,6 +91,57 @@ Minimos_Maximos[['Multiplo_Distribucion', 'Minimo_Tienda', 'Maximo_Tienda']] = M
 
 df_producto_tienda = pd.merge(df_producto_tienda, Minimos_Maximos, on='SKU', how='left')
 
+print("Consultando clones... ")
+query_clones = '''
+SELECT 
+	SUBSTRING(CONCAT([Original Vendor Item No_], [Variant Code]), 1, 10) AS [SKU],
+	IIF([No_] = '',
+				SUBSTRING(CONCAT([Original Vendor Item No_], [Variant Code]), 1, 10),
+				SUBSTRING(CONCAT([No_], [Variant Code]), 1, 10)
+				) AS [No_], 
+				
+						pcb.[Division Code],
+						[Description], 
+						[Product Group Code], 
+						[Item Category Code],
+						[Weather]
+				
+	FROM   PadresClones_Basicos AS pcb
+	JOIN [Allocations].[dbo].[Item_BC] 
+	ON pcb.VarianteColor = SUBSTRING(CONCAT([No_], [Variant Code]), 1, 10)
+
+	WHERE pcb.'''+ str(div[BU]) +'''
+
+	ORDER BY [SKU]
+	'''
+
+df_clones = pd.read_sql_query(query_clones, conn)
+df_clones.drop_duplicates(subset ="SKU", keep = 'first', inplace = True)
+
+
+
+data_tiendas = pd.read_excel(os.path.join(carpeta_input, "DATOS DE TIENDAS PBI 221206.xlsx"))
+# Agregando todos las caracterísiticas de la tienda ------------------------
+data_tiendas= data_tiendas[['NO', 'TIENDA', 'CLIMA', 'SH MAN', 'CANDY']]
+data_tiendas.columns = ['Location Code', 'Tienda', 'Clima', 'ShMan', 'Candy']
+df_producto_tienda = pd.merge(df_producto_tienda, data_tiendas, on='Location Code', how='left')
+
+
+# Si hay dulces la cobertura es diferente por que son perecederos 
+# 6 semanas y si es tienda hot 5 semanas
+if 'CANDY' in df_clones['Item Category Code'].unique():
+
+    print ('Existen dulces en la division')
+    condicion = df_clones[['SKU', 'Item Category Code']]
+    df_producto_tienda = pd.merge(df_producto_tienda, condicion, on='SKU', how='left')
+    
+    # Condiciones
+    df_producto_tienda.loc[df_producto_tienda['Item Category Code'] == 'CANDY', 'Cobertura'] = 6
+    df_producto_tienda.loc[(df_producto_tienda['Clima'] == 'HOT') & (df_producto_tienda['Item Category Code'] == 'CANDY'), 'Cobertura'] = 5
+    
+    df_producto_tienda.drop(columns=['Item Category Code'], inplace=True)
+
+
 # Calculo de buffer
 # Redondear a multiplo de distribución deja el multiplo mas cercano 
 def roundBy(x, base, iferror):
@@ -125,47 +176,54 @@ if df_producto_tienda['Multiplo_Distribucion'].isna().sum()>0:
 
 df_producto_tienda['Nuevo_Buffer'] = df_producto_tienda['Nuevo_Buffer'].astype(int)
 
-#df_producto_tienda['Proyeccion_RNN'] = df_producto_tienda['Proyeccion_RNN'].astype(int)
-#df_producto_tienda['Nuevo_Buffer_RNN'] = df_producto_tienda['Nuevo_Buffer_RNN'].astype(int)
-#df_producto_tienda["Cobertura_ventas_RNN"] = df_producto_tienda.apply(lambda x: roundBy(x["Proyeccion_RNN"]*x["Cobertura"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
-#df_producto_tienda["Cobertura_ventas_RNN"] = df_producto_tienda.apply(lambda x: roundBy(x["Proyeccion_RNN"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
-#df_producto_tienda["Nuevo_Buffer_RNN"] = df_producto_tienda.apply(lambda x: crear_nuevo_buffer(x["Cobertura_ventas_RNN"], x["Minimo_Tienda"], x["Maximo_Tienda"]), axis=1)
+
+# Prediccion RNN-----------------------------------------------------------
+
+proyecciones_path = os.path.join(carpeta_output, "Proyecciones_"+BU+".csv")
+proyecciones = pd.read_csv(proyecciones_path)
+
+proyecciones['SKU'] = proyecciones['SKU'].astype(str)
+proyecciones['ID'] = proyecciones['SKU'] + proyecciones['Tienda']
+
+print('Concateando proyecciones RNN... ')
+
+df_producto_tienda['Proyeccion_RNN'] = ''
+df_producto_tienda['Proyeccion_Tiempo'] = ''
+
+
+for id in df_producto_tienda['ID'].unique():
+
+    cobertura = df_producto_tienda.loc[df_producto_tienda['ID'] == id, 'Cobertura'].values[0]
+
+    if cobertura is not None or cobertura != 0  :
+        if id in proyecciones['ID'].unique():
+            proyeccion = proyecciones[proyecciones['ID'] == id].head(int(cobertura))
+            
+            inicio  = proyeccion['Fecha'].min()
+            fin = proyeccion['Fecha'].max()
+            df_producto_tienda.loc[df_producto_tienda['ID'] == id, 'Proyeccion_Tiempo'] = str(inicio) + ' : ' + str(fin)
+            
+            proyeccion = proyeccion[['ID', 'Proyeccion']].groupby('ID').sum().reset_index()
+            proyeccion.columns = ['ID', 'Proyeccion_RNN']
+            df_producto_tienda.loc[df_producto_tienda['ID'] == id, 'Proyeccion_RNN'] = proyeccion['Proyeccion_RNN'][0]
+    else:
+        df_producto_tienda.loc[df_producto_tienda['ID'] == id, 'Proyeccion_RNN'] = 0   
 
 
 
+# Tal vez aqui podríamos dirigir las operaciones solo a los productos que tienen cobertura != ''
+df_producto_tienda['Proyeccion_RNN'] = df_producto_tienda['Proyeccion_RNN'].replace('', 1000000) 
+df_producto_tienda['Proyeccion_RNN'] = df_producto_tienda['Proyeccion_RNN'].astype(int)
+df_producto_tienda["Cobertura_ventas_RNN"] = df_producto_tienda.apply(lambda x: roundBy(x["Proyeccion_RNN"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
+df_producto_tienda["Nuevo_Buffer_RNN"] = df_producto_tienda.apply(lambda x: crear_nuevo_buffer(x["Cobertura_ventas_RNN"], x["Minimo_Tienda"], x["Maximo_Tienda"]), axis=1)
 
-data_tiendas = pd.read_excel(os.path.join(carpeta_input, "DATOS DE TIENDAS PBI 221206.xlsx"))
-# Agregando todos las caracterísiticas de la tienda ------------------------
-data_tiendas= data_tiendas[['NO', 'TIENDA', 'CLIMA', 'SH MAN', 'CANDY']]
-data_tiendas.columns = ['Location Code', 'Tienda', 'Clima', 'ShMan', 'Candy']
-df_producto_tienda = pd.merge(df_producto_tienda, data_tiendas, on='Location Code', how='left')
+
+
+#df_producto_tienda.loc[df_producto_tienda['Proyeccion_RNN'] == 1000000, ['Proyeccion_RNN',"Cobertura_ventas_RNN", 'Nuevo_Buffer_RNN']] = np.nan
+
+
+
 # Agregando caracteristicas producto ---------------------------------------
-print("Consultando clones... ")
-query_clones = '''
-SELECT 
-	SUBSTRING(CONCAT([Original Vendor Item No_], [Variant Code]), 1, 10) AS [SKU],
-	IIF([No_] = '',
-				SUBSTRING(CONCAT([Original Vendor Item No_], [Variant Code]), 1, 10),
-				SUBSTRING(CONCAT([No_], [Variant Code]), 1, 10)
-				) AS [No_], 
-				
-						pcb.[Division Code],
-						[Description], 
-						[Product Group Code], 
-						[Item Category Code],
-						[Weather]
-				
-	FROM   PadresClones_Basicos AS pcb
-	JOIN [Allocations].[dbo].[Item_BC] 
-	ON pcb.VarianteColor = SUBSTRING(CONCAT([No_], [Variant Code]), 1, 10)
-
-	WHERE pcb.'''+ str(div[BU]) +'''
-
-	ORDER BY [SKU]
-	'''
-	
-df_clones = pd.read_sql_query(query_clones, conn)
-df_clones.drop_duplicates(subset ="SKU", keep = 'first', inplace = True)
 df_producto_tienda = pd.merge(df_producto_tienda, df_clones, on='SKU', how='left')
 
 # ON ORDER ----------------------------------------------------------------------------------
@@ -178,24 +236,42 @@ cobertura_onorder = str(today +  pd.DateOffset(days=8*7))
 cobertura_onorder = cobertura_onorder.replace(" 00:00:00","")
 cobertura_onorder = "'"+cobertura_onorder+"'"
 
+
 print('Consultando On Order...')
+
 query_onOrder = '''
-    SELECT [VarianteColor] AS [No_], SUM([Qtty Pen]) AS [Qtty Pen]
+    SELECT [VarianteColor] AS [No_], [Qtty Pen] AS [Qtty Pen], [Expected Receipt Week], [Expected Receipt Year]
     FROM [Allocations].[dbo].[PadresClones_Basicos] AS pcb
     JOIN SH_REPORTS.dbo.SH_OnOrderBC_vw as OnOrder
     ON pcb.VarianteColor = SUBSTRING( CONCAT([Item], [Variant Code]),1,10)
     WHERE  pcb.'''+ str(div[BU]) +'''
     AND [Expected Receipt Date] BETWEEN '''+end_date+''' AND '''+cobertura_onorder+'''
     AND [Qtty Pen] IS NOT NULL
-    GROUP BY [VarianteColor]
+    --- GROUP BY [VarianteColor]
 
 '''
 df_onorder = pd.read_sql(query_onOrder, con=conn)
 
+df_onorder['week-year'] = df_onorder['Expected Receipt Week'].astype(str) +' - ' + df_onorder['Expected Receipt Year'].astype(str)
+df_onorder = df_onorder[['No_', 'Qtty Pen', 'week-year']]
 df_onorder = pd.merge(df_clones, df_onorder,on='No_', how='left')
 df_onorder['Qtty Pen'] = df_onorder['Qtty Pen'].fillna(0)
-df_onorder = df_onorder[['SKU', 'Qtty Pen']]
-df_onorder = df_onorder.groupby('SKU').sum().reset_index()
+
+df_onorder = df_onorder[['SKU', 'Qtty Pen','week-year']]
+# agrupar por sku y week-year, sumar qtty pen
+df_onorder = df_onorder.groupby(['SKU', 'week-year']).sum().reset_index()
+
+#week-year as a column
+df_onorder = df_onorder.pivot(index='SKU', columns='week-year', values='Qtty Pen').reset_index()
+# sum rows
+
+qtty_total = df_onorder.set_index('SKU')
+qtty_total = qtty_total.sum(axis=1).reset_index()
+qtty_total.columns = ['SKU', 'QttyPen']
+df_onorder = pd.merge(qtty_total, df_onorder, on='SKU', how='left')
+
+
+#df_onorder['Qtty_Pen'] = df_onorder.sum(axis=1)
 df_producto_tienda = pd.merge(df_producto_tienda, df_onorder, on='SKU', how='left')
 
 # MATRIX paa poder jalar REST LEAN ----------------------------------------------------------------------------------
@@ -303,11 +379,11 @@ if div[BU] == "[Division Code] IN ('W-ACC', 'M-ACC')":
 
 
 
-
+# Resumen --------------------------------------------------------------------------------------------------------------------------------
 
 # El resuemn incluye los productos agrupados por SKU, ya no hay desglose por tienda
-#resumen= df_producto_tienda[['SKU', 'Ventas_Suma','Proyeccion_RNN','Proyeccion_Actual', 'Inventario_Actual', "Nuevo_Buffer", "Nuevo_Buffer_RNN"]]
-resumen= df_producto_tienda[['SKU', 'Ventas_Suma','Proyeccion_Actual', 'Inventario_Actual', "Nuevo_Buffer"]]
+resumen= df_producto_tienda[['SKU', 'Ventas_Suma','Proyeccion_RNN','Proyeccion_Actual', 'Inventario_Actual', "Nuevo_Buffer", "Nuevo_Buffer_RNN"]]
+#resumen= df_producto_tienda[['SKU', 'Ventas_Suma','Proyeccion_Actual', 'Inventario_Actual', "Nuevo_Buffer"]]
 resumen = resumen.groupby('SKU').sum().reset_index()
 
 resumen = pd.merge(resumen, df_clones, on='SKU', how='left')
@@ -318,10 +394,12 @@ df_buffers['SKU'] = df_buffers['ID'].str[0:10]
 df_buffers_resumen = df_buffers.groupby('SKU')['Buffer Actual'].sum().reset_index()
 resumen = pd.merge(resumen, df_buffers_resumen, on='SKU', how='left')
 
+# Agregando on order
+#resumen = pd.merge(resumen, df_onorder, on='SKU', how='left')
 
-
+#Buffer básico --------------------------------------------------------------------------------------------------------------------------------
 '''BUFFER DINAMICO''' #RECORDAR MANTENER ESTE BLOQUE EN FUTURAS VERSIONES
-import math
+'''import math
 #Funciones
 def condiciones(INV_BUFFER):
     cond_superior = 66
@@ -333,17 +411,32 @@ def condiciones(INV_BUFFER):
     else:
         return 'BUFFER OK'
 
-def sigmoid(df):
+def sigmoid(df):    
     rango = 1.3
     aceleracion = 4.9
     cruce = 0.6
     return rango*(1-1/(1+math.exp(-aceleracion*((df['INV_BUFFER']/100)-cruce))))-rango/2
 
 def redondear(numero, multiplo):
-    return round(numero / multiplo) * multiplo
+    return round(numero / multiplo) * multiplo'''
+
+
+import BufferDinamico as bd
+
+df_producto_tienda[['INV_BUFFER', 'Nota_Buffer', 'Incremento_buffer', 'DB_Profundidad']] = ''
+df_producto_tienda['INV_BUFFER'], df_producto_tienda['Nota_Buffer'], df_producto_tienda['Incremento_buffer'], df_producto_tienda['DB_Profundidad'] = zip(*df_producto_tienda.apply(lambda x: bd.buffer_dinamico(x["Inventario_Actual"],x["Nuevo_Buffer"], x["Ventas_Suma"]), axis=1))
+
+
+df_producto_tienda[['INV_BUFFER_RNN', 'Nota_Buffer_RNN', 'Incremento_buffer_RNN', 'DB_Profundidad_RNN']] = ''
+df_producto_tienda['INV_BUFFER_RNN'], df_producto_tienda['Nota_Buffer_RNN'], df_producto_tienda['Incremento_buffer_RNN'], df_producto_tienda['DB_Profundidad_RNN'] = zip(*df_producto_tienda.apply(lambda x: bd.buffer_dinamico(x["Inventario_Actual"],x["Nuevo_Buffer_RNN"], x["Ventas_Suma"]), axis=1))
+df_producto_tienda["DB_Profundidad_RNN"] = df_producto_tienda.apply(lambda x: roundBy(x["DB_Profundidad"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
+
+df_producto_tienda.loc[df_producto_tienda['Proyeccion_RNN'] == 1000000, ['Proyeccion_RNN',"Cobertura_ventas_RNN", 'Nuevo_Buffer_RNN','INV_BUFFER_RNN', 'Nota_Buffer_RNN', 'Incremento_buffer_RNN', 'DB_Profundidad_RNN']] = np.nan
+
+    #DB_Profundidad = df_producto_tienda.apply(lambda x: roundBy(x["DB_Profundidad"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
 
 #apply conditions #adaptar al nuevo input
-df_producto_tienda['INV_BUFFER'] = round(df_producto_tienda['Inventario_Actual'] / df_producto_tienda['Buffer Actual']*100,1)
+'''df_producto_tienda['INV_BUFFER'] = round(df_producto_tienda['Inventario_Actual'] / df_producto_tienda['Buffer Actual']*100,1)
 df_producto_tienda['WOS'] = round(df_producto_tienda['Inventario_Actual']/df_producto_tienda['Ventas_Suma'],1)
 df_producto_tienda['Nota_Buffer'] = df_producto_tienda['INV_BUFFER'].apply(condiciones)
 df_producto_tienda['Incremento_buffer'] = df_producto_tienda.apply(sigmoid, axis=1)
@@ -357,9 +450,57 @@ df_producto_tienda['Incremento_buffer'] = df_producto_tienda['Incremento_buffer'
 
 #round by with the function rounby the values in the column 'DB_Profundidad'
 df_producto_tienda["DB_Profundidad"] = df_producto_tienda.apply(lambda x: roundBy(x["DB_Profundidad"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
+'''
+
+'''df_producto_tienda['INV_BUFFER'] = round(df_producto_tienda['Inventario_Actual'] / df_producto_tienda['Nuevo_Buffer']*100,1)
+df_producto_tienda['WOS'] = round(df_producto_tienda['Inventario_Actual']/df_producto_tienda['Ventas_Suma'],1)
+df_producto_tienda['Nota_Buffer'] = df_producto_tienda['INV_BUFFER'].apply(condiciones)'''
+
+
+'''df_producto_tienda.reset_index(drop=True, inplace=True)
+
+df_producto_tienda['Incremento_buffer'] = ''
+for i in df_producto_tienda.index:
+    try:
+        df_producto_tienda['Incremento_buffer'][i] = condiciones(df_producto_tienda['INV_BUFFER'][i]) 
+    except:
+        print(df_producto_tienda['INV_BUFFER'][i])    
+'''
 
 
 
+
+
+
+'''''
+df_producto_tienda['Incremento_buffer'] = sigmoid(df_producto_tienda)
+#df_producto_tienda['Incremento_buffer'] = df_producto_tienda.apply(sigmoid, axis=1)
+df_producto_tienda['DB_Profundidad'] = df_producto_tienda['Nuevo_Buffer']*(1+df_producto_tienda['Incremento_buffer'])
+df_producto_tienda['DB_Profundidad'] = df_producto_tienda['DB_Profundidad'].round(0)
+
+#FORMATO
+#CHANGE DE FORMAT OF COLUMNS 'INV_BUFFER' AND 'INCREMENTO_BUFFER' TO PERCENTAGE
+df_producto_tienda['INV_BUFFER'] = df_producto_tienda['INV_BUFFER'].astype(str) + '%'
+df_producto_tienda['Incremento_buffer'] = df_producto_tienda['Incremento_buffer'].astype(str) + '%'
+
+#round by with the function rounby the values in the column 'DB_Profundidad'
+df_producto_tienda["DB_Profundidad"] = df_producto_tienda.apply(lambda x: roundBy(x["DB_Profundidad"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
+
+df_producto_tienda['INV_BUFFER_RNN'] = round(df_producto_tienda['Inventario_Actual'] / df_producto_tienda['Nuevo_Buffer_RNN']*100,1)
+df_producto_tienda['Nota_Buffer_RNN'] = df_producto_tienda['INV_BUFFER_RNN'].apply(condiciones)
+df_producto_tienda['Incremento_buffer_RNN'] = df_producto_tienda.apply(sigmoid, axis=1)
+df_producto_tienda['DB_Profundidad_RNN'] = df_producto_tienda['Nuevo_Buffer_RNN']*(1+df_producto_tienda['Incremento_buffer'])
+df_producto_tienda['DB_Profundidad_RNN'] = df_producto_tienda['DB_Profundidad_RNN'].round(0)
+
+#FORMATO
+#CHANGE DE FORMAT OF COLUMNS 'INV_BUFFER' AND 'INCREMENTO_BUFFER' TO PERCENTAGE
+df_producto_tienda['INV_BUFFER_RNN'] = df_producto_tienda['INV_BUFFER_RNN'].astype(str) + '%'
+df_producto_tienda['Incremento_buffer_RNN'] = df_producto_tienda['Incremento_buffer_RNN'].astype(str) + '%'
+
+#round by with the function rounby the values in the column 'DB_Profundidad'
+df_producto_tienda["DB_Profundidad_RNN"] = df_producto_tienda.apply(lambda x: roundBy(x["DB_Profundidad"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
+
+'''
 df_producto_tienda.to_excel(os.path.join(carpeta_output, 'BufferBasico_'+BU+'.xlsx'), index=False)
 
 buffer_dinamico = df_producto_tienda[['SKU','DB_Profundidad']].groupby('SKU').sum().reset_index()
@@ -367,4 +508,4 @@ resumen = pd.merge(resumen, buffer_dinamico, on='SKU', how='left')
 resumen.to_excel(os.path.join(carpeta_output, 'Resumen_'+BU+'.xlsx'), index=False)
 
 
-print('Archivo de buffers por tiendas y resumen generados con exito')
+print('Archivo de buffers por tiendas y resumen generados con exito en la carpeta de output', carpeta_output)
