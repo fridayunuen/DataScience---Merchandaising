@@ -9,7 +9,7 @@ done = pd.read_excel(path_inptu + "/archivos_consultados.xlsx")
 path_historico = r"S:\BI\3. MERCHANDISING\FRAMEWORK\FRAMEWORK\FrameworkHistorico.csv"
 historico = pd.read_csv(path_historico)
 
-Directory = r"C:\Users\fcolin\Desktop\2022"
+Directory = r"S:\BI\3. MERCHANDISING\FRAMEWORK\FRAMEWORK\2023"
 
 os.chdir(Directory)
 files = os.listdir()
