@@ -211,20 +211,47 @@ for id in df_producto_tienda['ID'].unique():
 
 
 
+
 # Tal vez aqui podríamos dirigir las operaciones solo a los productos que tienen cobertura != ''
-df_producto_tienda['Proyeccion_RNN'] = df_producto_tienda['Proyeccion_RNN'].replace('', 1000000) 
+df_producto_tienda['Proyeccion_RNN'] = df_producto_tienda['Proyeccion_RNN'].replace('', 0)
 df_producto_tienda['Proyeccion_RNN'] = df_producto_tienda['Proyeccion_RNN'].astype(int)
 df_producto_tienda["Cobertura_ventas_RNN"] = df_producto_tienda.apply(lambda x: roundBy(x["Proyeccion_RNN"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
 df_producto_tienda["Nuevo_Buffer_RNN"] = df_producto_tienda.apply(lambda x: crear_nuevo_buffer(x["Cobertura_ventas_RNN"], x["Minimo_Tienda"], x["Maximo_Tienda"]), axis=1)
 
 
 
-#df_producto_tienda.loc[df_producto_tienda['Proyeccion_RNN'] == 1000000, ['Proyeccion_RNN',"Cobertura_ventas_RNN", 'Nuevo_Buffer_RNN']] = np.nan
+#df = df_producto_tienda
+#df.columns
+#df = df[['ID', 'Proyeccion_RNN', 'Proyeccion_Actual']]
+
+#df['Proyeccion_RNN'] = df['Proyeccion_RNN'].replace(np.nan, 0)
+#df['Proyeccion_RNN'] = df['Proyeccion_RNN'].replace(np.nan, 0)
+
+# si el procentafe de diferencia entre proyecciones es mayor a 200% se coloca np.nan
+# tratar de aplicarlo a la columna Proyeccion_RNN contemplando que existen 0 en la columna Proyeccion_Actual
+#df['Proyeccion_RNN'] = df.apply(lambda x:  np.nan if (x['Proyeccion_RNN'] / x['Proyeccion_Actual']) > 2 else x['Proyeccion_RNN'], axis=1)
+
+df_producto_tienda.reset_index(drop=True, inplace=True)
+
+for i in df_producto_tienda.index:
+    if df_producto_tienda.loc[i, 'Proyeccion_Actual'] != 0:
+        df_producto_tienda.loc[i, 'Proyeccion_RNN'] = np.nan if (df_producto_tienda.loc[i, 'Proyeccion_RNN'] / df_producto_tienda.loc[i, 'Proyeccion_Actual']) > 3 else df_producto_tienda.loc[i, 'Proyeccion_RNN']
+    else: 
+        df_producto_tienda.loc[i, 'Proyeccion_RNN'] = np.nan
+
+
+df_producto_tienda.sort_values(by=['Proyeccion_RNN'], inplace=True, ascending=False)
+
+
+
+
+df_producto_tienda.loc[df_producto_tienda['Proyeccion_RNN'] == 1000000, ['Proyeccion_RNN',"Cobertura_ventas_RNN", 'Nuevo_Buffer_RNN']] = np.nan
 
 
 
 # Agregando caracteristicas producto ---------------------------------------
 df_producto_tienda = pd.merge(df_producto_tienda, df_clones, on='SKU', how='left')
+
 
 # ON ORDER ----------------------------------------------------------------------------------
 end_date = str(today )
@@ -470,8 +497,6 @@ for i in df_producto_tienda.index:
 
 
 
-
-
 '''''
 df_producto_tienda['Incremento_buffer'] = sigmoid(df_producto_tienda)
 #df_producto_tienda['Incremento_buffer'] = df_producto_tienda.apply(sigmoid, axis=1)
@@ -485,6 +510,9 @@ df_producto_tienda['Incremento_buffer'] = df_producto_tienda['Incremento_buffer'
 
 #round by with the function rounby the values in the column 'DB_Profundidad'
 df_producto_tienda["DB_Profundidad"] = df_producto_tienda.apply(lambda x: roundBy(x["DB_Profundidad"],x["Multiplo_Distribucion"], x["Multiplo_Distribucion"]), axis=1)
+
+
+
 
 df_producto_tienda['INV_BUFFER_RNN'] = round(df_producto_tienda['Inventario_Actual'] / df_producto_tienda['Nuevo_Buffer_RNN']*100,1)
 df_producto_tienda['Nota_Buffer_RNN'] = df_producto_tienda['INV_BUFFER_RNN'].apply(condiciones)
